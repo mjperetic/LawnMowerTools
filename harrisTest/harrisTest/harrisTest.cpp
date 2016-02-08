@@ -83,7 +83,7 @@ int main() {
 	Mat R1, R2, P1, P2;
 
 	// Grab the calibration params from the yml file
-	FileStorage fs1("C:/users/mjper/Documents/stereoCalibParams.yml", FileStorage::READ);
+	FileStorage fs1("C:/Users/mjper/Documents/stereoCalibParams.yml", FileStorage::READ);
 	fs1["CM1"] >> CM1;
 	fs1["CM2"] >> CM2;
 	fs1["D1"] >> D1;
@@ -337,8 +337,6 @@ disparityPair disparityCalculator(Mat src_img1, Mat src_img2) {
 				{
 					cout << "Nothing in Image 2!!!!!" << endl;
 				}
-				//Mat testthing1 = img1Data[img1Iter].boxImgGray;
-				//Mat testthing2 = img1Mask(img1Data[img1Iter].boxRect);
 
 				// If image 1 is the wider image
 				if (img1Boxes[img1Iter].width >= img2Boxes[img2Iter].width) {
