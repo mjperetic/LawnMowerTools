@@ -9,6 +9,7 @@
 #include "opencv2/calib3d/calib3d.hpp"
 #include <iostream>
 #include <string>
+#include <sstream>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -18,8 +19,14 @@
 // Set CONTOUR_DEBUG to 1 if you want the results displayed in windows; set it 0 if not
 #define CONTOUR_DEBUG_OUTPUT 1
 #define BOX_BIDI_DISPLAY 1
-// Only take child contours
+// Only take child contours (if 1)
 #define JERRY_MODE 1
+// Display the remapped epipolar lines of the original image
+#define SHOW_ORIG_EPIS 1
+
+// Camera focal length and baseline (in mm)
+#define LOGI_C270_FOCAL_LENGTH 4
+#define STEREO_PAIR_BASELINE 80
 
 using namespace cv;
 using namespace std;
@@ -34,6 +41,10 @@ int epsilonThresh = 6;
 int max_epsilonThresh = 20;
 int thresholdMode = 0;
 int max_thresholdMode = 4;
+int relBoxSize = 50;
+int max_relBoxSize = 100;
+int epipoleDisplacement = 50;
+int max_epipoleDisplacement = 100;
 RNG rng(12345);
 
 struct disparityPair {
@@ -70,6 +81,31 @@ epiLine::epiLine() {
 	c = 0;
 }
 
+class dispDistance {
+	double disp, distMM, distFT;
+public:
+	dispDistance(int, int);
+	dispDistance();
+	double disparity() { return disp; }
+	double distanceMM() { return distMM; }
+	double distanceFT() { return distFT; }
+};
+
+// Calculate disparity when given distance
+dispDistance::dispDistance(int imgLx, int imgRx) {
+	// Subtract left from right, because R will be a larger number, since x represents col number
+	disp = imgRx - imgLx;
+	distMM = (double)(LOGI_C270_FOCAL_LENGTH * STEREO_PAIR_BASELINE) / disp;
+	distFT = distMM / (25.4 * 12);
+}
+
+// Set the values to garbage data to show that this has been initialized and not reset
+dispDistance::dispDistance() {
+	disp = -1;
+	distMM = -1;
+	distFT = -1;
+}
+
 struct boxData {
 	Mat boxImg;
 	Mat boxImgGray;
@@ -97,12 +133,21 @@ boxData::boxData() {
 struct matchData {
 	boxData img1Data;
 	boxData img2Data;
+	dispDistance disparityDistance;
 	matchData(boxData, boxData);
+	matchData(boxData, boxData, dispDistance);
 };
 
 matchData::matchData(boxData img1, boxData img2) {
 	img1Data = img1;
 	img2Data = img2;
+	disparityDistance = dispDistance();
+}
+
+matchData::matchData(boxData img1, boxData img2, dispDistance disp) {
+	img1Data = img1;
+	img2Data = img2;
+	disparityDistance = disp;
 }
 
 //matchData::matchData(boxData img1, boxData img2) {
@@ -115,6 +160,7 @@ matchData::matchData(boxData img1, boxData img2) {
 Mat featureContourDetector(Mat src_img, bool dispBoxes, Mat F);
 vector<Rect> featureBoxDetector(Mat src_img);
 disparityPair disparityCalculator(Mat src_img_left, Mat src_img_right, Mat F);
+void epiDispAndRemap(Mat img, bool whichImg, Mat F, vector<Point> epiPoints, Mat mapx, Mat mapy);
 
 // Constants used in displaying the matched boxes -- no sense defining each function call
 Scalar goodMatchColor = Scalar(0.0, 220.0, 0.0); // Green
@@ -129,16 +175,23 @@ Mat img2Mask;
 int main() {
 
 	// Camera image variables
-	Mat img1, img2;
+	Mat img1, img2, img1_epi, img2_epi;
 	Mat img1Mask, img2Mask;
 	// Feature detector output variables
 	Mat img1_feat, img2_feat;
 	// Overlay image variables
 	Mat img1_over, img2_over;
 	disparityPair pairedBoxes;
-	// Epipolar lines
-	vector<Vec3f> epiLinesImg1in2;
-	vector<Vec3f> epiLinesImg2in1;
+	// Test epipolar line points
+	vector<Point> epiPoints;
+
+	// Create demo points
+	epiPoints.push_back(Point(320, 1 * 80));
+	epiPoints.push_back(Point(320, 2 * 80));
+	epiPoints.push_back(Point(320, 3 * 80));
+	epiPoints.push_back(Point(320, 4 * 80));
+	epiPoints.push_back(Point(320, 5 * 80));
+
 
 	// Initialize the camera matrix for both cameras
 	Mat CM1 = Mat(3, 3, CV_64FC1);
@@ -166,9 +219,8 @@ int main() {
 
 	// Create remapping matrices
 	Mat map1x, map1y, map2x, map2y;
-	Mat img1_remap, img2_remap;
+	Mat img1_remap, img2_remap, img1_remap_epi, img2_remap_epi;
 	
-
 	// Initialize the key watcher to a harmless value until receiving an input from the user
 	char lastKey = 0;
 
@@ -179,6 +231,8 @@ int main() {
 	createTrackbar("Blur Thresh:", "Controls", &blurThresh, max_blurThresh);
 	createTrackbar("Epsilon Thresh:", "Controls", &epsilonThresh, max_epsilonThresh);
 	createTrackbar("Threshold Mode:", "Controls", &thresholdMode, max_thresholdMode);
+	createTrackbar("Rel Box Size (%):", "Controls", &relBoxSize, max_relBoxSize);
+	createTrackbar("Epipole Displacement (%):", "Controls", &epipoleDisplacement, max_epipoleDisplacement);
 
 	// Set up the capture images and their grayscale conversions
 	VideoCapture cap1(CAM_1_NUM);
@@ -208,7 +262,7 @@ int main() {
 
 	// Loop until the user kills it
 	while (lastKey != 27) {
-		if (lastKey != 'p') {
+		if (lastKey != 'p' && lastKey != ' ') {
 			// Update the images
 			cap1 >> img1;
 			cap2 >> img2;
@@ -217,6 +271,11 @@ int main() {
 			//img1_remap.copyTo(img1Mask);
 			remap(img2, img2_remap, map2x, map2y, INTER_LINEAR, BORDER_CONSTANT, Scalar());
 			//img2_remap.copyTo(img2Mask);
+
+			if (SHOW_ORIG_EPIS) {
+				epiDispAndRemap(img1, 0, F, epiPoints, map1x, map1y);
+				epiDispAndRemap(img2, 1, F, epiPoints, map2x, map2y);
+			}
 
 			// Get boxes for this pair
 			if (BOX_BIDI_DISPLAY) {
@@ -427,7 +486,6 @@ vector<Rect> featureBoxDetector(Mat src_img) {
 	// Approximation stuff for keeping the lowest level contours
 	vector<vector<Point>> contours_poly_kids;
 	vector<Rect> boundRect_kids;
-
 	vector<Rect> boundRectOutput;
 
 	for (int i = 0; i < contours.size(); i++) {
@@ -503,8 +561,11 @@ disparityPair disparityCalculator(Mat src_img1, Mat src_img2, Mat F) {
 			// Calculate epipolar lines from the middle top and middle bottom of the current box
 			vector<Vec3f> curEpiLines;
 			vector<Point> boxEdgePoints;
-			boxEdgePoints.push_back(Point(img1Data[img1Iter].boxRect.x, img1Data[img1Iter].boxRect.y - (0.5 * img1Data[img1Iter].boxRect.height)));
-			boxEdgePoints.push_back(Point(img1Data[img1Iter].boxRect.x, img1Data[img1Iter].boxRect.y + (1.5 * img1Data[img1Iter].boxRect.height)));
+			boxEdgePoints.push_back(Point(img1Data[img1Iter].boxRect.x, img1Data[img1Iter].boxRect.y - (0.01 * epipoleDisplacement * img1Data[img1Iter].boxRect.height)));
+			boxEdgePoints.push_back(Point(img1Data[img1Iter].boxRect.x, img1Data[img1Iter].boxRect.y + (0.01 * (100 + epipoleDisplacement) * img1Data[img1Iter].boxRect.height)));
+			//boxEdgePoints.push_back(Point(img1Data[img1Iter].boxRect.x, img1Data[img1Iter].boxRect.y - (0.5 * img1Data[img1Iter].boxRect.height)));
+			//boxEdgePoints.push_back(Point(img1Data[img1Iter].boxRect.x, img1Data[img1Iter].boxRect.y + (1.5 * img1Data[img1Iter].boxRect.height)));
+
 			computeCorrespondEpilines(boxEdgePoints, 1, F, curEpiLines);
 
 			// Save the epipolar lines for this box
@@ -528,71 +589,78 @@ disparityPair disparityCalculator(Mat src_img1, Mat src_img2, Mat F) {
 				// be a smaller number than the corresponding y on the bot line
 
 				if (img2Data[img2Iter].boxRect.y > img1Data[img1Iter].topEpiBound.yVal(img2Data[img2Iter].boxRect.x) && (img2Data[img2Iter].boxRect.y + img2Data[img2Iter].boxRect.height) < img1Data[img1Iter].botEpiBound.yVal(img2Data[img2Iter].boxRect.x)) {
-					// If image 1 is the wider image
-					if (img1Boxes[img1Iter].width >= img2Boxes[img2Iter].width) {
-						// Check to make sure it's also the taller image
-						if (img1Boxes[img1Iter].height >= img2Boxes[img2Iter].height)
-						{
-							matchTemplate(img1Data[img1Iter].boxImgGray, img2Data[img2Iter].boxImgGray, score, CV_TM_CCORR_NORMED);
-						}
-						else
-						{
-							// If image 2 (the template) is the taller image, shorten it to the height of image 1
-							// The taller parts of the image are kept so that references to the top corner of the images are consistent
-							Rect crop = Rect(0, 0, img2Boxes[img2Iter].width, img1Boxes[img1Iter].height);
-							matchTemplate(img1Data[img1Iter].boxImgGray, img2Data[img2Iter].boxImgGray(crop), score, CV_TM_CCORR_NORMED);
+					
+					// Check that the dimensions for the box in image 2 are no less than X% of the dimensions for the box in image 1 
+					// AND that the dimensions for the box in image 2 are no more than 1.X% of the dimensions for the box in image 1
+					// where X% is the percent of the relBoxSize bar
+					if ((img2Data[img2Iter].boxRect.width >= 0.01 * relBoxSize * img1Data[img1Iter].boxRect.width) && (img2Data[img2Iter].boxRect.height >= 0.01 * relBoxSize * img1Data[img1Iter].boxRect.height) && (img2Data[img2Iter].boxRect.width <= 0.01 * (200 - relBoxSize) * img1Data[img1Iter].boxRect.width) && (img2Data[img2Iter].boxRect.height <= 0.01 * (200 - relBoxSize) * img1Data[img1Iter].boxRect.height)) {
+						
+						// If image 1 is the wider image, use it as the reference image, so image 2 is the "template" being matched to it at all locations
+						if (img1Boxes[img1Iter].width >= img2Boxes[img2Iter].width) {
+							// Check to make sure it's also the taller image
+							if (img1Boxes[img1Iter].height >= img2Boxes[img2Iter].height)
+							{
+								matchTemplate(img1Data[img1Iter].boxImgGray, img2Data[img2Iter].boxImgGray, score, CV_TM_CCORR_NORMED);
+							}
+							else
+							{
+								// If image 2 (the template) is the taller image, shorten it to the height of image 1
+								// The taller parts of the image are kept so that references to the top corner of the images are consistent
+								Rect crop = Rect(0, 0, img2Boxes[img2Iter].width, img1Boxes[img1Iter].height);
+								matchTemplate(img1Data[img1Iter].boxImgGray, img2Data[img2Iter].boxImgGray(crop), score, CV_TM_CCORR_NORMED);
 
-						}
+							}
 
-						// Find the best match and where it is in the image
-						minMaxLoc(score, &minVal, &maxVal, &minLoc, &maxLoc, Mat());
+							// Find the best match and where it is in the image
+							minMaxLoc(score, &minVal, &maxVal, &minLoc, &maxLoc, Mat());
 
-						// Check this set of scores; if they're better, store them
-						if (maxVal >= img1Data[img1Iter].matchScore) {
-							img1Data[img1Iter].matchScore = maxVal;
-							img1Data[img1Iter].matchOffset = maxLoc;
-							img1Data[img1Iter].matchIndex = img2Iter;
-							img1Data[img1Iter].templateIm = false;
+							// Check this set of scores; if they're better, store them
+							if (maxVal >= img1Data[img1Iter].matchScore) {
+								img1Data[img1Iter].matchScore = maxVal;
+								img1Data[img1Iter].matchOffset = maxLoc;
+								img1Data[img1Iter].matchIndex = img2Iter;
+								img1Data[img1Iter].templateIm = false;
+							}
+							// Likewise, have image 2 save these scores if they're better
+							if (maxVal >= img2Data[img2Iter].matchScore) {
+								img2Data[img2Iter].matchScore = maxVal;
+								img2Data[img2Iter].matchOffset = maxLoc;
+								img2Data[img2Iter].matchIndex = img1Iter;
+								img2Data[img2Iter].templateIm = true;
+							}
 						}
-						// Likewise, have image 2 save these scores if they're better
-						if (maxVal >= img2Data[img2Iter].matchScore) {
-							img2Data[img2Iter].matchScore = maxVal;
-							img2Data[img2Iter].matchOffset = maxLoc;
-							img2Data[img2Iter].matchIndex = img1Iter;
-							img2Data[img2Iter].templateIm = true;
-						}
-					}
-					// If image 2 is the wider image
-					else {
-						// Check to make sure it's also the taller image
-						if (img2Boxes[img2Iter].height >= img1Boxes[img1Iter].height) {
-							matchTemplate(img2Data[img2Iter].boxImgGray, img1Data[img1Iter].boxImgGray, score, CV_TM_CCORR_NORMED);
-						}
+						// If image 2 is the wider image use it as the reference image, so image 1 is the "template" being matched to it at all locations
 						else {
-							// If image 1 (the template) is the taller image, shorten it to the height of image 2
-							// The taller parts of the image are kept so that references to the top corner of the images are consistent
-							Rect crop = Rect(0, 0, img1Boxes[img1Iter].width, img2Boxes[img2Iter].height);
-							matchTemplate(img2Data[img2Iter].boxImgGray, img1Data[img1Iter].boxImgGray(crop), score, CV_TM_CCORR_NORMED);
-						}
+							// Check to make sure it's also the taller image
+							if (img2Boxes[img2Iter].height >= img1Boxes[img1Iter].height) {
+								matchTemplate(img2Data[img2Iter].boxImgGray, img1Data[img1Iter].boxImgGray, score, CV_TM_CCORR_NORMED);
+							}
+							else {
+								// If image 1 (the template) is the taller image, shorten it to the height of image 2
+								// The taller parts of the image are kept so that references to the top corner of the images are consistent
+								Rect crop = Rect(0, 0, img1Boxes[img1Iter].width, img2Boxes[img2Iter].height);
+								matchTemplate(img2Data[img2Iter].boxImgGray, img1Data[img1Iter].boxImgGray(crop), score, CV_TM_CCORR_NORMED);
+							}
 
-						// Find the best match and where it is in the image
-						minMaxLoc(score, &minVal, &maxVal, &minLoc, &maxLoc, Mat());
+							// Find the best match and where it is in the image
+							minMaxLoc(score, &minVal, &maxVal, &minLoc, &maxLoc, Mat());
 
-						// Check this set of scores; if they're better, store them
-						if (maxVal >= img1Data[img1Iter].matchScore) {
-							img1Data[img1Iter].matchScore = maxVal;
-							img1Data[img1Iter].matchOffset = maxLoc;
-							img1Data[img1Iter].matchIndex = img2Iter;
-							img1Data[img1Iter].templateIm = true;
+							// Check this set of scores; if they're better, store them
+							if (maxVal >= img1Data[img1Iter].matchScore) {
+								img1Data[img1Iter].matchScore = maxVal;
+								img1Data[img1Iter].matchOffset = maxLoc;
+								img1Data[img1Iter].matchIndex = img2Iter;
+								img1Data[img1Iter].templateIm = true;
+							}
+							// Likewise, have image 2 save these scores if they're better
+							if (maxVal >= img2Data[img2Iter].matchScore) {
+								img2Data[img2Iter].matchScore = maxVal;
+								img2Data[img2Iter].matchOffset = maxLoc;
+								img2Data[img2Iter].matchIndex = img1Iter;
+								img2Data[img2Iter].templateIm = false;
+							}
 						}
-						// Likewise, have image 2 save these scores if they're better
-						if (maxVal >= img2Data[img2Iter].matchScore) {
-							img2Data[img2Iter].matchScore = maxVal;
-							img2Data[img2Iter].matchOffset = maxLoc;
-							img2Data[img2Iter].matchIndex = img1Iter;
-							img2Data[img2Iter].templateIm = false;
-						}
-					}
+					} // End size comparison check
 				} // End epipolar lines boundary check
 			} // End loop for boxes in image 2
 		} // End loop for boxes in image 1
@@ -612,10 +680,21 @@ disparityPair disparityCalculator(Mat src_img1, Mat src_img2, Mat F) {
 			if (img1Data[img1Iter].matchIndex != -1) {
 				// Compare the index for the best match in image 2 to the current index for the box in image 1 and save both if they match
 				if (img1Iter == img2Data[img1Data[img1Iter].matchIndex].matchIndex) {
-					goodBiDiMatch.push_back(matchData(img1Data[img1Iter], img2Data[img1Data[img1Iter].matchIndex]));
-
+					// Save these results
+					// Include the offset of the matched image relative to the template image in disparity calculations
+					if (img1Data[img1Iter].templateIm) {
+						// Determine the disparity for this box -- using the constructor outside the matchData constructor for readability only
+						dispDistance curDisparity = dispDistance(img1Data[img1Iter].boxRect.x + img1Data[img1Iter].matchOffset.x, img2Data[img1Data[img1Iter].matchIndex].boxRect.x);
+						goodBiDiMatch.push_back(matchData(img1Data[img1Iter], img2Data[img1Data[img1Iter].matchIndex], curDisparity));
+					}
+					else {
+						// Determine the disparity for this box -- using the constructor outside the matchData constructor for readability only
+						dispDistance curDisparity = dispDistance(img1Data[img1Iter].boxRect.x, img2Data[img1Data[img1Iter].matchIndex].boxRect.x + img2Data[img1Data[img1Iter].matchIndex].matchOffset.x);
+						goodBiDiMatch.push_back(matchData(img1Data[img1Iter], img2Data[img1Data[img1Iter].matchIndex], curDisparity));
+					}
 				}
 				else {
+					// Save that this box doesn't have a bidirectional match
 					img1FailedBiDiMatch.push_back(img1Data[img1Iter]);
 				}
 			}
@@ -638,13 +717,17 @@ disparityPair disparityCalculator(Mat src_img1, Mat src_img2, Mat F) {
 			rectangle(img1BoxesOverlay, goodBiDiMatch[i].img1Data.boxRect, goodMatchColor, 2, 8, 0);
 			rectangle(img2BoxesOverlay, goodBiDiMatch[i].img2Data.boxRect, goodMatchColor, 2, 8, 0);
 
-			// Number boxes
-			putText(img1BoxesOverlay, to_string(i), Point(goodBiDiMatch[i].img1Data.boxRect.x, goodBiDiMatch[i].img1Data.boxRect.y), CV_FONT_HERSHEY_PLAIN, 1, goodMatchColor, 1, 8);
-			putText(img2BoxesOverlay, to_string(i), Point(goodBiDiMatch[i].img2Data.boxRect.x, goodBiDiMatch[i].img2Data.boxRect.y), CV_FONT_HERSHEY_PLAIN, 1, goodMatchColor, 1, 8);
+			// Number boxes and display disparity
+			stringstream label;
+			label << "Box: " << i << " Dist: " << goodBiDiMatch[i].disparityDistance.distanceFT();
+			putText(img1BoxesOverlay, label.str(), Point(goodBiDiMatch[i].img1Data.boxRect.x, goodBiDiMatch[i].img1Data.boxRect.y), CV_FONT_HERSHEY_PLAIN, 1, goodMatchColor, 1, 8);
+			putText(img2BoxesOverlay, label.str(), Point(goodBiDiMatch[i].img2Data.boxRect.x, goodBiDiMatch[i].img2Data.boxRect.y), CV_FONT_HERSHEY_PLAIN, 1, goodMatchColor, 1, 8);
 	
+			// Display the distance to the object as calcualted by disparity
+
 			// Draw epipolar lines (just for image 1; image 2 doesn't calculate epipolar lines)
-			line(img2BoxesOverlay, Point(0, goodBiDiMatch[i].img1Data.topEpiBound.yVal(0)), Point(src_img1.size().width, goodBiDiMatch[i].img1Data.topEpiBound.yVal(src_img1.size().width)), goodMatchColor, 1, 8, 0);
-			line(img2BoxesOverlay, Point(0, goodBiDiMatch[i].img1Data.botEpiBound.yVal(0)), Point(src_img1.size().width, goodBiDiMatch[i].img1Data.botEpiBound.yVal(src_img1.size().width)), goodMatchColor, 1, 8, 0);
+			//line(img2BoxesOverlay, Point(0, goodBiDiMatch[i].img1Data.topEpiBound.yVal(0)), Point(src_img1.size().width, goodBiDiMatch[i].img1Data.topEpiBound.yVal(src_img1.size().width)), goodMatchColor, 1, 8, 0);
+			//line(img2BoxesOverlay, Point(0, goodBiDiMatch[i].img1Data.botEpiBound.yVal(0)), Point(src_img1.size().width, goodBiDiMatch[i].img1Data.botEpiBound.yVal(src_img1.size().width)), goodMatchColor, 1, 8, 0);
 		}
 		// Draw the bad matches
 		//for (int i = 0; i < img1FailedBiDiMatch.size(); i++) {
@@ -663,4 +746,62 @@ disparityPair disparityCalculator(Mat src_img1, Mat src_img2, Mat F) {
 	result.img2 = img2BoxesOverlay;
 
 	return result;
+}
+
+void epiDispAndRemap(Mat img, bool whichImg, Mat F, vector<Point> epiPoints, Mat mapx, Mat mapy) {
+	// Epipolar lines
+	vector<Vec3f> epiLinesImg1in2;
+	vector<Vec3f> epiLinesImg2in1;
+
+	Mat img_epi = img;
+	Mat img_epi_remap;
+
+	if (whichImg) {
+		computeCorrespondEpilines(epiPoints, 2, F, epiLinesImg2in1);
+		vector<epiLine> img2in1Epis;
+		img2in1Epis.push_back(epiLine(epiLinesImg2in1[0][0], epiLinesImg2in1[0][1], epiLinesImg2in1[0][2]));
+		img2in1Epis.push_back(epiLine(epiLinesImg2in1[1][0], epiLinesImg2in1[1][1], epiLinesImg2in1[1][2]));
+		img2in1Epis.push_back(epiLine(epiLinesImg2in1[2][0], epiLinesImg2in1[2][1], epiLinesImg2in1[2][2]));
+		img2in1Epis.push_back(epiLine(epiLinesImg2in1[3][0], epiLinesImg2in1[3][1], epiLinesImg2in1[3][2]));
+		img2in1Epis.push_back(epiLine(epiLinesImg2in1[4][0], epiLinesImg2in1[4][1], epiLinesImg2in1[4][2]));
+		
+		for (int i = 0; i < 5; i++) {
+			line(img_epi, Point(0, img2in1Epis[i].yVal(0)), Point(640, img2in1Epis[i].yVal(640)), goodMatchColor, 1, 8, 0);
+		}
+
+		remap(img_epi, img_epi_remap, mapx, mapy, INTER_LINEAR, BORDER_CONSTANT, Scalar());
+
+		// Show what the epipolar lines should look like after remap
+		for (int i = 1; i <= 5; i++) {
+			line(img_epi_remap, Point(0, i * 80), Point(640, i * 80), noMatchColor, 1, 8, 0);
+		}
+
+		imshow("Epi Right", img_epi);
+		imshow("Epi Remap Right", img_epi_remap);
+	}
+	else {
+		computeCorrespondEpilines(epiPoints, 1, F, epiLinesImg1in2);
+		vector<epiLine> img1in2Epis;
+		img1in2Epis.push_back(epiLine(epiLinesImg1in2[0][0], epiLinesImg1in2[0][1], epiLinesImg1in2[0][2]));
+		img1in2Epis.push_back(epiLine(epiLinesImg1in2[1][0], epiLinesImg1in2[1][1], epiLinesImg1in2[1][2]));
+		img1in2Epis.push_back(epiLine(epiLinesImg1in2[2][0], epiLinesImg1in2[2][1], epiLinesImg1in2[2][2]));
+		img1in2Epis.push_back(epiLine(epiLinesImg1in2[3][0], epiLinesImg1in2[3][1], epiLinesImg1in2[3][2]));
+		img1in2Epis.push_back(epiLine(epiLinesImg1in2[4][0], epiLinesImg1in2[4][1], epiLinesImg1in2[4][2]));
+
+		for (int i = 0; i < 5; i++) {
+			line(img_epi, Point(0, img1in2Epis[i].yVal(0)), Point(640, img1in2Epis[i].yVal(640)), goodMatchColor, 1, 8, 0);
+		}
+
+		remap(img_epi, img_epi_remap, mapx, mapy, INTER_LINEAR, BORDER_CONSTANT, Scalar());
+
+		// Show what the epipolar lines should look like after remap
+		for (int i = 1; i <= 5; i++) {
+			line(img_epi_remap, Point(0, i * 80), Point(640, i * 80), noMatchColor, 1, 8, 0);
+		}
+
+		imshow("Epi Left", img_epi);
+		imshow("Epi Remap Left", img_epi_remap);
+	}
+	
+	return;
 }
