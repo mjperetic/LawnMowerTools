@@ -158,15 +158,16 @@ matchData::matchData(boxData img1, boxData img2, dispDistance disp) {
 
 /// Function header
 Mat featureContourDetector(Mat src_img, bool dispBoxes, Mat F);
-vector<Rect> featureBoxDetector(Mat src_img);
-disparityPair disparityCalculator(Mat src_img_left, Mat src_img_right, Mat F);
+vector<Rect> featureBoxDetector(Mat src_img, Rect searchRegion);
+disparityPair disparityCalculator(Mat src_img_left, Mat src_img_right, Mat F, Rect searchRegion);
 void epiDispAndRemap(Mat img, bool whichImg, Mat F, vector<Point> epiPoints, Mat mapx, Mat mapy);
 
 // Constants used in displaying the matched boxes -- no sense defining each function call
 Scalar goodMatchColor = Scalar(0.0, 220.0, 0.0); // Green
 Scalar noMatchColor = Scalar(0.0, 0.0, 220.0); // This is red because OpenCV does BGR colors
 Mat whiteImage;
-Mat tempImage;
+Mat white_remap_img1, white_remap_img2;
+Mat white_shared_visible;
 Mat img1Mask;
 Mat img2Mask;
 
@@ -254,11 +255,46 @@ int main() {
 
 	// Create the masks used for block matching
 	// Generate a white region the shape of the camera by remapping a white picture
-	whiteImage = 255.0 * Mat::ones(img1.size(), CV_8UC3);
-	remap(whiteImage, tempImage, map1x, map1y, INTER_LINEAR, BORDER_CONSTANT, Scalar());
-	cvtColor(tempImage, img1Mask, CV_BGR2GRAY);
-	remap(whiteImage, tempImage, map2x, map2y, INTER_LINEAR, BORDER_CONSTANT, Scalar());
-	cvtColor(tempImage, img2Mask, CV_BGR2GRAY);
+	whiteImage = 255.0 * Mat::ones(img1.size(), CV_8UC1);
+	remap(whiteImage, white_remap_img1, map1x, map1y, INTER_LINEAR, BORDER_CONSTANT, Scalar());
+	remap(whiteImage, white_remap_img2, map2x, map2y, INTER_LINEAR, BORDER_CONSTANT, Scalar());
+	bitwise_and(white_remap_img1, white_remap_img2, white_shared_visible);
+
+	Mat white_shared_gray, white_thresh_out;
+	vector<vector<Point>> contours;
+	vector<Vec4i> hierarchy;
+
+	//imshow("Shared Vision", white_shared_visible);
+	//cvtColor(white_shared_visible, white_shared_gray, CV_BGR2GRAY);
+	/// Detect edges using Threshold
+	//threshold(white_shared_visible, white_thresh_out, 127, 255, CV_THRESH_BINARY);
+	Canny(white_shared_visible, white_thresh_out, 0, 30, 3);
+	/// Find contours
+	findContours(white_thresh_out, contours, hierarchy, CV_RETR_EXTERNAL, CHAIN_APPROX_SIMPLE, Point(0, 0));
+
+	// Bounding box of the contour of the overlapping region of the two rectified images
+	Rect sharedBox;
+
+	// Keep just the largest bounding box, incase others show up for some reason
+	for (int i = 0; i < contours.size(); i++) {
+		vector<Point> contours_poly;
+		// Kill sharp edges by approximating the contour with a polynomial
+		//approxPolyDP(Mat(contours[i]), contours_poly, 3, true);
+		// Create a bounding rectangle around the object
+		Rect boundRect;
+		boundRect = boundingRect(Mat(contours[i]));
+
+		if ((boundRect.height * boundRect.width) > (sharedBox.height * sharedBox.width)) {
+			sharedBox = boundRect;
+		}
+	}
+	//Mat white_shared_box;
+	//white_shared_box = white_shared_visible;
+
+	//rectangle(white_shared_box, sharedBox, Scalar(255.0,255.0,255.0), 1, 8, 0);
+
+	//imshow("Shared Region", white_shared_box);
+
 
 	// Loop until the user kills it
 	while (lastKey != 27) {
@@ -279,7 +315,7 @@ int main() {
 
 			// Get boxes for this pair
 			if (BOX_BIDI_DISPLAY) {
-				pairedBoxes = disparityCalculator(img1_remap, img2_remap, F);
+				pairedBoxes = disparityCalculator(img1_remap, img2_remap, F, sharedBox);
 
 				// Overlay the detected features on the image
 				img1_over = img1_remap + pairedBoxes.img1;
@@ -403,6 +439,8 @@ Mat featureContourDetector(Mat src_img, bool dispBoxes, Mat F)
 
 		// Create a bounding circle around the object
 		//minEnclosingCircle((Mat)contours_poly[i], center[i], radius[i]);
+
+		// Note: Rich is actually Mexican
 	}
 	
 	/// Draw polygonal contour + bonding rects + circles
@@ -463,7 +501,7 @@ Mat featureContourDetector(Mat src_img, bool dispBoxes, Mat F)
 	return drawing;
 }
 
-vector<Rect> featureBoxDetector(Mat src_img) {
+vector<Rect> featureBoxDetector(Mat src_img, Rect searchRegion) {
 
 	Mat src_img_gray, threshold_output;
 	vector<vector<Point> > contours;
@@ -476,10 +514,10 @@ vector<Rect> featureBoxDetector(Mat src_img) {
 	/// Detect edges using Threshold
 	threshold(src_img_gray, threshold_output, thresh, 255, thresholdMode);
 	/// Find contours
-	findContours(threshold_output, contours, hierarchy, CV_RETR_TREE, CV_CHAIN_APPROX_SIMPLE, Point(0, 0));
+	findContours(threshold_output(searchRegion), contours, hierarchy, CV_RETR_TREE, CV_CHAIN_APPROX_SIMPLE, Point(searchRegion.x, searchRegion.y));
 	
 	/// Approximate contours to polygons + get bounding rects and circles
-	vector<vector<Point> > contours_poly(contours.size());
+	vector<vector<Point>> contours_poly(contours.size());
 	vector<Rect> boundRect(contours.size());
 	vector<Point2f>center(contours.size());
 
@@ -527,10 +565,10 @@ vector<Rect> featureBoxDetector(Mat src_img) {
 	}
 }
 
-disparityPair disparityCalculator(Mat src_img1, Mat src_img2, Mat F) {
+disparityPair disparityCalculator(Mat src_img1, Mat src_img2, Mat F, Rect searchRegion) {
 	// Get bounding box info for each image
-	vector<Rect> img1Boxes = featureBoxDetector(src_img1);
-	vector<Rect> img2Boxes = featureBoxDetector(src_img2);
+	vector<Rect> img1Boxes = featureBoxDetector(src_img1, searchRegion);
+	vector<Rect> img2Boxes = featureBoxDetector(src_img2, searchRegion);
 	Mat score;
 
 	// Output images with distances and boxes overlaid
@@ -559,6 +597,16 @@ disparityPair disparityCalculator(Mat src_img1, Mat src_img2, Mat F) {
 			cvtColor(src_img1(img1Boxes[img1Iter]), img1Data[img1Iter].boxImgGray, CV_BGR2GRAY);
 
 			// Calculate epipolar lines from the middle top and middle bottom of the current box
+			
+			// THIS CONCEPT IS ACTUALLY FLAWED
+			// If the rectification successfully remapped the images, they should have perfectly horizontal epipolar lines,
+			// in which case, all we need to do is check that the y value of the top corner of the box in img2 is a larger number
+			// than the y value + height modifier of the top corner of the box in img1 AND that the y value of the bottom corner
+			// of the box in img2 is a smaller number than the y value + height modifier of the bottom corner of the box in img2.
+
+			// *****!!!! OR BETTER YET !!!!*****
+			// the epipolar lines used should be remapped to the rectified space, then all this logic applied.
+
 			vector<Vec3f> curEpiLines;
 			vector<Point> boxEdgePoints;
 			boxEdgePoints.push_back(Point(img1Data[img1Iter].boxRect.x, img1Data[img1Iter].boxRect.y - (0.01 * epipoleDisplacement * img1Data[img1Iter].boxRect.height)));
@@ -587,6 +635,15 @@ disparityPair disparityCalculator(Mat src_img1, Mat src_img2, Mat F) {
 				// since y references the column number of the image. Thus, to be within a line-bounded region, a box must have
 				// its top left corner be a larger number than the corresponding y on the top line and its bottom left corner
 				// be a smaller number than the corresponding y on the bot line
+
+				// THIS CONCEPT IS ACTUALLY FLAWED
+				// If the rectification successfully remapped the images, they should have perfectly horizontal epipolar lines,
+				// in which case, all we need to do is check that the y value of the top corner of the box in img2 is a larger number
+				// than the y value + height modifier of the top corner of the box in img1 AND that the y value of the bottom corner
+				// of the box in img2 is a smaller number than the y value + height modifier of the bottom corner of the box in img2.
+
+				// *****!!!! OR BETTER YET !!!!*****
+				// the epipolar lines used should be remapped to the rectified space, then all this logic applied.
 
 				if (img2Data[img2Iter].boxRect.y > img1Data[img1Iter].topEpiBound.yVal(img2Data[img2Iter].boxRect.x) && (img2Data[img2Iter].boxRect.y + img2Data[img2Iter].boxRect.height) < img1Data[img1Iter].botEpiBound.yVal(img2Data[img2Iter].boxRect.x)) {
 					
