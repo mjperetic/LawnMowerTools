@@ -1,0 +1,15 @@
+﻿Build started 3/3/2016 11:47:06 PM.
+     1>Project "C:\Users\mjper\Documents\amp\LawnMowerTools\cornerDetector\cornerDetector\cornerDetector.vcxproj" on node 2 (Build target(s)).
+     1>ClCompile:
+         C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\bin\x86_amd64\CL.exe /c /IC:\opencv\build\\include /I"C:\msgpack-c-master\msgpack-c-master\include" /IC:\Users\mjper\Documents\amp\LawnMower /IC:\boost_1_59_0\ /Zi /nologo /W3 /WX- /sdl /Od /D WIN32 /D _DEBUG /D _CONSOLE /D _LIB /D _CRT_SECURE_NO_WARNINGS /D _UNICODE /D UNICODE /Gm /EHsc /RTC1 /MDd /GS /fp:precise /Zc:wchar_t /Zc:forScope /Yu"stdafx.h" /Fp"x64\Debug\cornerDetector.pch" /Fo"x64\Debug\\" /Fd"x64\Debug\vc120.pdb" /Gd /TP /errorReport:prompt cornerDetector.cpp
+         cornerDetector.cpp
+     1>cornerDetector.cpp(190): warning C4244: 'argument' : conversion from 'float' to 'int', possible loss of data
+       Link:
+         C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\bin\x86_amd64\link.exe /ERRORREPORT:PROMPT /OUT:"C:\Users\mjper\Documents\amp\LawnMowerTools\cornerDetector\x64\Debug\cornerDetector.exe" /INCREMENTAL /NOLOGO /LIBPATH:C:\opencv\build\\x64\vc12\lib /LIBPATH:C:\boost_1_59_0\\stage\lib /LIBPATH:"C:\boost_1_59_0\\lib64-msvc-12.0" opencv_ts300d.lib opencv_world300d.lib kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:\Users\mjper\Documents\amp\LawnMowerTools\cornerDetector\x64\Debug\cornerDetector.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /DYNAMICBASE /NXCOMPAT /IMPLIB:"C:\Users\mjper\Documents\amp\LawnMowerTools\cornerDetector\x64\Debug\cornerDetector.lib" /MACHINE:X64 x64\Debug\cornerDetector.obj
+         x64\Debug\stdafx.obj
+         cornerDetector.vcxproj -> C:\Users\mjper\Documents\amp\LawnMowerTools\cornerDetector\x64\Debug\cornerDetector.exe
+     1>Done Building Project "C:\Users\mjper\Documents\amp\LawnMowerTools\cornerDetector\cornerDetector\cornerDetector.vcxproj" (Build target(s)).
+
+Build succeeded.
+
+Time Elapsed 00:00:00.91

@@ -18,15 +18,19 @@
 #define CAM_2_NUM 0
 // Set CONTOUR_DEBUG to 1 if you want the results displayed in windows; set it 0 if not
 #define CONTOUR_DEBUG_OUTPUT 1
-#define BOX_BIDI_DISPLAY 1
+#define BOX_BIDI_DISPLAY 0
 // Only take child contours (if 1)
-#define JERRY_MODE 1
+#define JERRY_MODE 0
 // Display the remapped epipolar lines of the original image
-#define SHOW_ORIG_EPIS 1
+#define SHOW_ORIG_EPIS 0
 
 // Camera focal length and baseline (in mm)
-#define LOGI_C270_FOCAL_LENGTH 4
+#define LOGI_C270_FOCAL_LENGTH_MM 4
+#define LOGI_C270_PIXEL_WIDTH_MM 0.0028
 #define STEREO_PAIR_BASELINE 80
+// focal_pixel = (image_width_in_pixels * 0.5) / tan(FOV * 0.5 * PI/180)
+//const double logi_c270_focal_pixels = (640 * 0.5) / tan(60 * 0.5 * 3.141592654 / 180);
+const double logi_c270_focal_pixels = 790;
 
 using namespace cv;
 using namespace std;
@@ -94,8 +98,8 @@ public:
 // Calculate disparity when given distance
 dispDistance::dispDistance(int imgLx, int imgRx) {
 	// Subtract left from right, because R will be a larger number, since x represents col number
-	disp = imgRx - imgLx;
-	distMM = (double)(LOGI_C270_FOCAL_LENGTH * STEREO_PAIR_BASELINE) / disp;
+	disp = imgLx - imgRx;
+	distMM = (double)(logi_c270_focal_pixels * STEREO_PAIR_BASELINE) / disp;
 	distFT = distMM / (25.4 * 12);
 }
 
@@ -288,13 +292,6 @@ int main() {
 			sharedBox = boundRect;
 		}
 	}
-	//Mat white_shared_box;
-	//white_shared_box = white_shared_visible;
-
-	//rectangle(white_shared_box, sharedBox, Scalar(255.0,255.0,255.0), 1, 8, 0);
-
-	//imshow("Shared Region", white_shared_box);
-
 
 	// Loop until the user kills it
 	while (lastKey != 27) {
@@ -334,6 +331,14 @@ int main() {
 			// Display the results
 			imshow("Stereo Left", img1_over);
 			imshow("Stereo Right", img2_over);
+
+			Mat overlaidImgs;
+			addWeighted(img1_over, 0.5, img2_over, 0.5, 0, overlaidImgs);
+			Mat white_shared_box;
+			white_shared_box = white_shared_visible;
+
+			rectangle(overlaidImgs, sharedBox, Scalar(255.0, 255.0, 255.0), 1, 8, 0);
+			imshow("Overlaid Images", overlaidImgs);
 		}
 		else {
 			// Block here until a new input is received (so no updates!)
